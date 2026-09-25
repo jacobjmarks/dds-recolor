@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DdsRecolor.Cli/DdsRecolor.Cli.csproj" />
+    <Project Path="src/DdsRecolor.Core/DdsRecolor.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DdsRecolor.Tests/DdsRecolor.Tests.csproj" />
+  </Folder>
+</Solution>
