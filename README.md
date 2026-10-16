@@ -1,5 +1,8 @@
 # dds-recolor
 
+> [!NOTE]
+> Work in progress
+
 Recolor `.dds` texture files by mapping a source colour to a target colour.
 
 Designed for recolouring textures while preserving everything that matters:
