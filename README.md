@@ -265,14 +265,31 @@ adjustment, and `--intensity` scales everything at once.
 Cube maps, texture arrays and volume textures are rejected loudly rather than
 mis-walked. None are present in the target corpus.
 
+## Interactive GUI
+
+Launch the desktop tuner with:
+
+```powershell
+dotnet run --project src/DdsRecolor.Gui
+```
+
+Open a folder to recursively list DDS textures, or open a single file. The GUI
+previews the recolored base mip for BC1, BC2 and BC3 textures as parameters
+change. Hold **Hold to view original** for a before/after comparison. The
+parameter field copies the source/target colors and non-default recolor options;
+append the fragment to a CLI invocation with the desired folder and output
+arguments. Other recognized DDS formats remain listed but cannot be previewed
+or recolored.
+
 ## Project layout
 
 ```
 src/DdsRecolor.Core/       library: header parser, BCn codecs, hue shift, block engine
   Formats/                 format enum, RGB/HSV, RGB565 codec, BC1 block codec
-  Io/                      DDS header parse/validate, file IO
+  Io/                      DDS header parse/validate, file IO, BC preview decoder
   Recolor/                 hue shift transform, block engine, repeat-run detector
 src/DdsRecolor.Cli/        command line front end
+src/DdsRecolor.Gui/        Avalonia desktop texture tuner
 tests/DdsRecolor.Tests/    unit and fixture-based regression tests
 tests/fixtures/            20 committed .dds fixtures (see its README)
 tools/                     corpus survey and fixture generator

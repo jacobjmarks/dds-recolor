@@ -1,0 +1,32 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="DdsRecolor.Gui.App"
+             RequestedThemeVariant="Default">
+             <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
+
+    <Application.Styles>
+        <FluentTheme />
+        <StyleInclude Source="avares://Avalonia.Controls.ColorPicker/Themes/Fluent/Fluent.xaml" />
+    </Application.Styles>
+
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="AppBackgroundBrush" Color="#F5F6F3" />
+                    <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#E5EAE6" />
+                    <SolidColorBrush x:Key="ListItemBackgroundBrush" Color="#F8F9F6" />
+                    <SolidColorBrush x:Key="PrimaryTextBrush" Color="#202824" />
+                    <SolidColorBrush x:Key="SecondaryTextBrush" Color="#56645D" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="AppBackgroundBrush" Color="#151A18" />
+                    <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#222A27" />
+                    <SolidColorBrush x:Key="ListItemBackgroundBrush" Color="#303936" />
+                    <SolidColorBrush x:Key="PrimaryTextBrush" Color="#F1F5F2" />
+                    <SolidColorBrush x:Key="SecondaryTextBrush" Color="#A9B7B0" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>
