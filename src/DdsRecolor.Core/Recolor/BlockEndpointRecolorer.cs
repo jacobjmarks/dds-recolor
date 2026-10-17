@@ -20,6 +20,9 @@ public sealed class RecolorResult
     /// to preserve the BC1 colour mode.
     /// </summary>
     public int BlocksWithModeInversion { get; init; }
+
+    /// <summary>Blocks whose distinct source endpoints quantized to one RGB565 value.</summary>
+    public int BlocksWithEndpointCollision { get; init; }
 }
 
 /// <summary>
@@ -86,6 +89,7 @@ public sealed class BlockEndpointRecolorer
         int blocksModified = 0;
         int blocksVisited = 0;
         int inversions = 0;
+        int endpointCollisions = 0;
 
         int colorOffset = header.Format.ColorBlockOffset();
         int blockBytes = header.BlockBytes;
@@ -116,9 +120,11 @@ public sealed class BlockEndpointRecolorer
 
                 var colorBlock = output.AsSpan(block + colorOffset, Bc1Block.Size);
                 var (c0, c1) = Bc1Block.ReadEndpoints(colorBlock);
+                var (originalPacked0, originalPacked1) = Bc1Block.ReadPackedEndpoints(colorBlock);
 
                 // Read the mode this block is currently in, before any write.
                 bool blockWasFourColor = !forceFourColorMode && Bc1Block.IsFourColorMode(colorBlock);
+                bool preserveDistinctEndpoints = originalPacked0 != originalPacked1;
 
                 Rgb newC0 = _shift.Apply(c0);
                 Rgb newC1 = _shift.Apply(c1);
@@ -131,26 +137,18 @@ public sealed class BlockEndpointRecolorer
                     continue;
                 }
 
-                // Requantising can collapse two distinct endpoints onto the same
-                // 565 value. That would turn the block into a flat colour and
-                // destroy the shading the indices encode, so leave such a block
-                // alone rather than flattening it.
-                ushort packed0 = newC0.ToRgb565Perceptual();
-                ushort packed1 = newC1.ToRgb565Perceptual();
-                if (packed0 == packed1)
-                {
-                    continue;
-                }
-
                 // For BC2/BC3 the required mode is always four-colour. For BC1,
                 // preserve whichever mode the block was already in.
                 bool requireFourColor = forceFourColorMode || blockWasFourColor;
 
-                if (Bc1Block.WriteEndpoints(colorBlock, newC0, newC1, requireFourColor))
+                if (Bc1Block.WriteEndpoints(
+                    colorBlock, newC0, newC1, requireFourColor, preserveDistinctEndpoints,
+                    out bool endpointCollision))
                 {
                     inversions++;
                 }
 
+                if (endpointCollision) endpointCollisions++;
                 blocksModified++;
             }
         }
@@ -161,6 +159,7 @@ public sealed class BlockEndpointRecolorer
             BlocksModified = blocksModified,
             BlocksVisited = blocksVisited,
             BlocksWithModeInversion = inversions,
+            BlocksWithEndpointCollision = endpointCollisions,
         };
     }
 }

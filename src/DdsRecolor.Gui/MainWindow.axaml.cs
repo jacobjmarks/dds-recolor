@@ -20,6 +20,7 @@ namespace DdsRecolor.Gui;
 public partial class MainWindow : Window
 {
     private readonly ObservableCollection<TextureEntry> _entries = [];
+    private readonly GuiSessionSettings _sessionSettings = GuiSessionSettings.Load();
     private DdsFile? _activeFile;
     private DdsPreviewImage? _originalPreview;
     private WriteableBitmap? _originalBitmap;
@@ -30,17 +31,86 @@ public partial class MainWindow : Window
     private long _previewGeneration;
     private bool _showOriginal;
     private bool _isInitialized;
+    private bool _settingParameterText;
+    private bool _applyingParameterText;
+    private bool _sessionReady;
+    private string? _lastOpenedPath;
+    private bool _openedAsSingleFile;
+    private string _lastValidArguments = string.Empty;
 
     public MainWindow()
     {
         InitializeComponent();
         FileListBox.ItemsSource = _entries;
+        _lastOpenedPath = _sessionSettings.OpenPath;
+        _openedAsSingleFile = _sessionSettings.OpenedAsSingleFile;
+        _lastValidArguments = _sessionSettings.LastValidArguments;
+        if (_lastOpenedPath is not null)
+        {
+            _rootFolder = _openedAsSingleFile
+                ? Path.GetDirectoryName(_lastOpenedPath)
+                : _lastOpenedPath;
+        }
 
         SourcePicker.PropertyChanged += ColorPickerPropertyChanged;
         TargetPicker.PropertyChanged += ColorPickerPropertyChanged;
         _isInitialized = true;
         UpdateSliderLabels();
-        UpdateParameterFragment();
+        if (string.IsNullOrWhiteSpace(_lastValidArguments))
+        {
+            UpdateParameterFragment();
+        }
+        else if (CliPreviewArguments.TryParse(
+            _lastValidArguments, _rootFolder, out RecolorOptions savedOptions,
+            out string message, out bool isWarning))
+        {
+            ApplyParsedOptions(savedOptions, message, isWarning);
+        }
+        else
+        {
+            SetParameterIssue($"Saved settings could not be loaded: {message}", isWarning: false);
+            UpdateParameterFragment();
+        }
+
+        Opened += RestoreSession;
+        _sessionReady = true;
+    }
+
+    private void MainWindowClosing(object? sender, WindowClosingEventArgs e) => SaveSession();
+
+    private void RestoreSession(object? sender, EventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_lastOpenedPath)) return;
+
+        try
+        {
+            if (_openedAsSingleFile)
+            {
+                if (!File.Exists(_lastOpenedPath))
+                {
+                    StatusText.Text = $"Last opened file no longer exists: {_lastOpenedPath}";
+                    return;
+                }
+
+                string folder = Path.GetDirectoryName(_lastOpenedPath) ?? Environment.CurrentDirectory;
+                SetEntries(folder, [_lastOpenedPath], _lastOpenedPath, openedAsSingleFile: true);
+                return;
+            }
+
+            if (!Directory.Exists(_lastOpenedPath))
+            {
+                StatusText.Text = $"Last opened folder no longer exists: {_lastOpenedPath}";
+                return;
+            }
+
+            string[] paths = EnumerateDdsFiles(_lastOpenedPath);
+            SetEntries(_lastOpenedPath, paths, _lastOpenedPath, openedAsSingleFile: false,
+                activeFilePath: _sessionSettings.ActiveFilePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            StatusText.Text = $"Could not restore last location: {ex.Message}";
+        }
     }
 
     private async void OpenFolderClicked(object? sender, RoutedEventArgs e)
@@ -52,11 +122,7 @@ public partial class MainWindow : Window
         string folder = folders[0].Path.LocalPath;
         try
         {
-            string[] files = Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories)
-                .Where(path => string.Equals(Path.GetExtension(path), ".dds", StringComparison.OrdinalIgnoreCase))
-                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            SetEntries(folder, files);
+            SetEntries(folder, EnumerateDdsFiles(folder), folder, openedAsSingleFile: false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -77,12 +143,21 @@ public partial class MainWindow : Window
 
         string path = files[0].Path.LocalPath;
         string folder = Path.GetDirectoryName(path) ?? Environment.CurrentDirectory;
-        SetEntries(folder, [path]);
+        SetEntries(folder, [path], path, openedAsSingleFile: true);
     }
 
-    private void SetEntries(string folder, IEnumerable<string> paths)
+    private static string[] EnumerateDdsFiles(string folder) =>
+        Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories)
+            .Where(path => string.Equals(Path.GetExtension(path), ".dds", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private void SetEntries(string folder, IEnumerable<string> paths, string openPath,
+                            bool openedAsSingleFile, string? activeFilePath = null)
     {
         _rootFolder = Path.GetFullPath(folder);
+        _lastOpenedPath = Path.GetFullPath(openPath);
+        _openedAsSingleFile = openedAsSingleFile;
         FolderPathText.Text = _rootFolder;
         _entries.Clear();
         foreach (string path in paths)
@@ -91,13 +166,19 @@ public partial class MainWindow : Window
         }
 
         FileCountText.Text = _entries.Count.ToString(CultureInfo.InvariantCulture);
-        FileListBox.SelectedIndex = _entries.Count == 0 ? -1 : 0;
+        FileListBox.SelectedItem = activeFilePath is null
+            ? _entries.FirstOrDefault()
+            : _entries.FirstOrDefault(entry => string.Equals(
+                Path.GetFullPath(entry.Path), Path.GetFullPath(activeFilePath), StringComparison.OrdinalIgnoreCase))
+                ?? _entries.FirstOrDefault();
         if (_entries.Count == 0) ClearPreview("No DDS files found in this folder");
+        SaveSession();
     }
 
     private async void FileSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (FileListBox.SelectedItem is not TextureEntry entry) return;
+        SaveSession();
 
         int generation = ++_loadGeneration;
         _previewCancellation?.Cancel();
@@ -191,7 +272,7 @@ public partial class MainWindow : Window
 
     private void OptionsChanged()
     {
-        if (!_isInitialized) return;
+        if (!_isInitialized || _applyingParameterText) return;
         UpdateParameterFragment();
         SchedulePreview();
     }
@@ -205,33 +286,106 @@ public partial class MainWindow : Window
 
     private void UpdateParameterFragment()
     {
-        if (!TryReadOptions(out RecolorOptions options, out _))
+        if (!TryReadOptions(out RecolorOptions options, out string error))
         {
-            ParameterTextBox.Text = string.Empty;
-            CopyParametersButton.IsEnabled = false;
+            SetParameterIssue(error, isWarning: false);
             return;
         }
 
-        var parameters = new List<string>
-        {
-            "--source", $"'{options.Source}'", "--target", $"'{options.Target}'",
-        };
-        if (options.Intensity != 1.0) AddValue(parameters, "--intensity", options.Intensity);
-        if (options.AlphaMode != AlphaMode.Straight) parameters.AddRange(["--alpha-mode", "premultiplied"]);
-        if (options.HueToleranceDegrees != 60.0) AddValue(parameters, "--tolerance", options.HueToleranceDegrees);
-        if (options.RetainSaturation) parameters.Add("--retain-saturation");
-        else if (options.SaturationStrength != 1.0) AddValue(parameters, "--saturation", options.SaturationStrength);
-        if (options.RetainBrightness) parameters.Add("--retain-brightness");
-        else if (options.BrightnessStrength != 1.0) AddValue(parameters, "--brightness", options.BrightnessStrength);
-
-        ParameterTextBox.Text = string.Join(' ', parameters);
-    CopyParametersButton.IsEnabled = true;
+        UpdateAppliedChannelsText(options);
+        _lastValidArguments = CliPreviewArguments.Format(options);
+        SetParameterText(_lastValidArguments);
+        SetParameterIssue(string.Empty, isWarning: false);
+        if (_sessionReady) SaveSession();
     }
 
-    private static void AddValue(List<string> parameters, string name, double value)
+    private void UpdateAppliedChannelsText(RecolorOptions options)
     {
-        parameters.Add(name);
-        parameters.Add(value.ToString("G", CultureInfo.InvariantCulture));
+        string saturation = options.RetainSaturation
+            ? "retained"
+            : options.SaturationStrength.ToString("P0", CultureInfo.InvariantCulture);
+        string brightness = options.RetainBrightness
+            ? "retained"
+            : options.BrightnessStrength.ToString("P0", CultureInfo.InvariantCulture);
+        AppliedChannelsText.Text = $"Saturation {saturation}  ·  Brightness {brightness}";
+    }
+
+    private void ParameterTextChanged(object? sender, TextChangedEventArgs e)
+    {
+        if (!_isInitialized || _settingParameterText || _applyingParameterText) return;
+        if (!CliPreviewArguments.TryParse(ParameterTextBox.Text ?? string.Empty, _rootFolder,
+            out RecolorOptions options, out string message, out bool isWarning))
+        {
+            SetParameterIssue(message, isWarning: false);
+            return;
+        }
+
+        ApplyParsedOptions(options, message, isWarning);
+    }
+
+    private void ApplyParsedOptions(RecolorOptions options, string message, bool isWarning)
+    {
+        _applyingParameterText = true;
+        SourcePicker.Color = Color.FromRgb(options.Source.R, options.Source.G, options.Source.B);
+        TargetPicker.Color = Color.FromRgb(options.Target.R, options.Target.G, options.Target.B);
+        IntensityBox.Text = options.Intensity.ToString("G", CultureInfo.InvariantCulture);
+        AlphaModeComboBox.SelectedIndex = options.AlphaMode == AlphaMode.Premultiplied ? 1 : 0;
+        ToleranceSlider.Value = options.HueToleranceDegrees;
+        RetainSaturationCheckBox.IsChecked = options.RetainSaturation;
+        SaturationSlider.Value = options.SaturationStrength;
+        RetainBrightnessCheckBox.IsChecked = options.RetainBrightness;
+        BrightnessSlider.Value = options.BrightnessStrength;
+        SaturationSlider.IsEnabled = !options.RetainSaturation;
+        BrightnessSlider.IsEnabled = !options.RetainBrightness;
+        _applyingParameterText = false;
+
+        UpdateSliderLabels();
+        _lastValidArguments = CliPreviewArguments.Format(options);
+        SetParameterText(_lastValidArguments);
+        SetParameterIssue(message, isWarning);
+        CopyParametersButton.IsEnabled = true;
+        SchedulePreview();
+        if (_sessionReady) SaveSession();
+    }
+
+    private void SetParameterText(string text)
+    {
+        _settingParameterText = true;
+        ParameterTextBox.Text = text;
+        _settingParameterText = false;
+        CopyParametersButton.IsEnabled = !string.IsNullOrWhiteSpace(text);
+    }
+
+    private void SetParameterIssue(string message, bool isWarning)
+    {
+        ParameterIssueText.Text = message;
+        ParameterIssueText.IsVisible = !string.IsNullOrWhiteSpace(message);
+        Color color = isWarning ? Color.Parse("#E2A84B") : Color.Parse("#F06B68");
+        ParameterIssueText.Foreground = new SolidColorBrush(color);
+        ParameterTextBox.BorderBrush = new SolidColorBrush(color);
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            ParameterTextBox.ClearValue(Border.BorderBrushProperty);
+        }
+        CopyParametersButton.IsEnabled =
+            !string.IsNullOrWhiteSpace(ParameterTextBox.Text) && (string.IsNullOrWhiteSpace(message) || isWarning);
+    }
+
+    private void SaveSession()
+    {
+        if (!_sessionReady) return;
+        _sessionSettings.OpenPath = _lastOpenedPath;
+        _sessionSettings.OpenedAsSingleFile = _openedAsSingleFile;
+        _sessionSettings.ActiveFilePath = (FileListBox.SelectedItem as TextureEntry)?.Path;
+        _sessionSettings.LastValidArguments = _lastValidArguments;
+        try
+        {
+            _sessionSettings.Save();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            StatusText.Text = $"Could not save GUI settings: {ex.Message}";
+        }
     }
 
     private bool TryReadOptions(out RecolorOptions options, out string error)
@@ -285,16 +439,17 @@ public partial class MainWindow : Window
         try
         {
             await Task.Delay(90, token);
-            (DdsPreviewImage image, int modified) = await Task.Run(() =>
+            (DdsPreviewImage image, int modified, int collisions) = await Task.Run(() =>
             {
                 var result = file.Recolor(new HueShift(options));
-                return (DdsPreviewDecoder.Decode(DdsFile.Load(result.Data)), result.BlocksModified);
+                return (DdsPreviewDecoder.Decode(DdsFile.Load(result.Data)),
+                    result.BlocksModified, result.BlocksWithEndpointCollision);
             }, token);
 
             if (token.IsCancellationRequested || generation != Volatile.Read(ref _previewGeneration)) return;
             _recoloredBitmap = CreateBitmap(image);
             if (!_showOriginal) PreviewImage.Source = _recoloredBitmap;
-            StatusText.Text = $"Preview updated · {modified:N0} blocks changed";
+            StatusText.Text = $"Preview updated · {modified:N0} blocks changed · {collisions:N0} endpoint collisions repaired";
         }
         catch (OperationCanceledException)
         {

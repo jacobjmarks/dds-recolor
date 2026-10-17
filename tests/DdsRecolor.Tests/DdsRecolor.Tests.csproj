@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\DdsRecolor.Core\DdsRecolor.Core.csproj" />
+    <ProjectReference Include="..\..\src\DdsRecolor.Gui\DdsRecolor.Gui.csproj" />
   </ItemGroup>
 
   <!--

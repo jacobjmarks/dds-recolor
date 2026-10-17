@@ -152,6 +152,109 @@ public class BlockEndpointRecolorerTests
         Assert.Equal(0, result.BlocksModified);
     }
 
+    [Fact]
+    public void RetainFlagsAndStrengths_AffectBlockPreviewOutput()
+    {
+        var sourceColor = new Rgb(0x80, 0x33, 0x33);
+        var targetColor = new Rgb(0xD8, 0x9D, 0x83);
+        byte[] source = DdsFixture.CreateBc1(4, 4, 1,
+            (block, _) => DdsFixture.WriteFourColorBlock(
+                block, sourceColor, new Rgb(0x68, 0x2A, 0x2A), indexByte: 0xE4));
+
+        byte[] Recolor(bool retainSaturation, double saturationStrength,
+                       bool retainBrightness, double brightnessStrength)
+        {
+            var options = new RecolorOptions
+            {
+                Source = sourceColor,
+                Target = targetColor,
+                HueToleranceDegrees = 360,
+                RetainSaturation = retainSaturation,
+                SaturationStrength = saturationStrength,
+                RetainBrightness = retainBrightness,
+                BrightnessStrength = brightnessStrength,
+            };
+            return DdsFile.Load(source).Recolor(new HueShift(options)).Data;
+        }
+
+        byte[] fullyAdjusted = Recolor(false, 1, false, 1);
+        byte[] retainedSaturation = Recolor(true, 1, false, 1);
+        byte[] retainedBrightness = Recolor(false, 1, true, 1);
+        byte[] zeroSaturationStrength = Recolor(false, 0, false, 1);
+        byte[] zeroBrightnessStrength = Recolor(false, 1, false, 0);
+
+        Assert.NotEqual(fullyAdjusted, retainedSaturation);
+        Assert.NotEqual(fullyAdjusted, retainedBrightness);
+        Assert.Equal(retainedSaturation, zeroSaturationStrength);
+        Assert.Equal(retainedBrightness, zeroBrightnessStrength);
+    }
+
+    [Fact]
+    public void QuantizedEndpointCollision_RecolorsBlockAndPreservesItsFourColorMode()
+    {
+        var shift = Shift(Brown, Grey);
+        ushort center = Brown.ToRgb565();
+        int centerRed = (center >> 11) & 0x1F;
+        int centerGreen = (center >> 5) & 0x3F;
+        int centerBlue = center & 0x1F;
+        ushort endpoint0 = 0;
+        ushort endpoint1 = 0;
+        bool foundCollision = false;
+
+        for (int red = Math.Max(0, centerRed - 3); red <= Math.Min(31, centerRed + 3) && !foundCollision; red++)
+        for (int green = Math.Max(0, centerGreen - 3); green <= Math.Min(63, centerGreen + 3) && !foundCollision; green++)
+        for (int blue = Math.Max(0, centerBlue - 3); blue <= Math.Min(31, centerBlue + 3) && !foundCollision; blue++)
+        {
+            ushort first = (ushort)((red << 11) | (green << 5) | blue);
+            Rgb shiftedFirst = shift.Apply(Rgb.FromRgb565(first));
+
+            for (int redStep = -1; redStep <= 1 && !foundCollision; redStep++)
+            for (int greenStep = -1; greenStep <= 1 && !foundCollision; greenStep++)
+            for (int blueStep = -1; blueStep <= 1 && !foundCollision; blueStep++)
+            {
+                if (Math.Abs(redStep) + Math.Abs(greenStep) + Math.Abs(blueStep) != 1) continue;
+                int neighborRed = red + redStep;
+                int neighborGreen = green + greenStep;
+                int neighborBlue = blue + blueStep;
+                if (neighborRed is < 0 or > 31 || neighborGreen is < 0 or > 63 || neighborBlue is < 0 or > 31)
+                {
+                    continue;
+                }
+
+                ushort second = (ushort)((neighborRed << 11) | (neighborGreen << 5) | neighborBlue);
+                if (first <= second || shift.Apply(Rgb.FromRgb565(second)).ToRgb565Perceptual()
+                    != shiftedFirst.ToRgb565Perceptual())
+                {
+                    continue;
+                }
+
+                endpoint0 = first;
+                endpoint1 = second;
+                foundCollision = true;
+            }
+        }
+
+        Assert.True(foundCollision, "The test setup must contain adjacent endpoints that quantize together.");
+
+        byte[] source = DdsFixture.CreateBc1(4, 4, 1, (block, _) =>
+        {
+            block[0] = (byte)endpoint0;
+            block[1] = (byte)(endpoint0 >> 8);
+            block[2] = (byte)endpoint1;
+            block[3] = (byte)(endpoint1 >> 8);
+            block[4..8].Fill(0xE4);
+        });
+
+        RecolorResult result = DdsFile.Load(source).Recolor(shift);
+        var (result0, result1) = Bc1Block.ReadPackedEndpoints(result.Data.AsSpan(128, 8));
+
+        Assert.Equal(1, result.BlocksWithEndpointCollision);
+        Assert.Equal(1, result.BlocksModified);
+        Assert.NotEqual(source, result.Data);
+        Assert.NotEqual(result0, result1);
+        Assert.True(Bc1Block.IsFourColorMode(result.Data.AsSpan(128, 8)));
+    }
+
     // -----------------------------------------------------------------------
     // Index bits and non-colour bytes are untouched (R9)
     // -----------------------------------------------------------------------

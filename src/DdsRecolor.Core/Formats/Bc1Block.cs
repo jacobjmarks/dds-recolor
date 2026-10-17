@@ -64,6 +64,10 @@ public static class Bc1Block
     /// format (BC2/BC3 are always 4-colour) or by reading the block's existing
     /// mode (BC1).
     /// </param>
+    /// <param name="preserveDistinctEndpoints">
+    /// When quantisation makes the new endpoints equal, move one endpoint to
+    /// the nearest legal adjacent RGB565 value to retain encoded contrast.
+    /// </param>
     /// <returns>
     /// True when the two endpoint slots had to be exchanged, which requires the
     /// index values to be remapped. Callers surface this as a diagnostic.
@@ -103,16 +107,28 @@ public static class Bc1Block
     /// </para>
     /// </remarks>
     public static bool WriteEndpoints(Span<byte> block, Rgb color0, Rgb color1,
-                                      bool requireFourColorMode)
+                                      bool requireFourColorMode, bool preserveDistinctEndpoints = false)
+        => WriteEndpoints(block, color0, color1, requireFourColorMode,
+            preserveDistinctEndpoints, out _);
+
+    internal static bool WriteEndpoints(Span<byte> block, Rgb color0, Rgb color1,
+                                        bool requireFourColorMode, bool preserveDistinctEndpoints,
+                                        out bool endpointCollision)
     {
         ushort packed0 = color0.ToRgb565Perceptual();
         ushort packed1 = color1.ToRgb565Perceptual();
+        endpointCollision = preserveDistinctEndpoints && packed0 == packed1;
+
+        if (endpointCollision)
+        {
+            (packed0, packed1) = ClosestDistinctPair(
+                packed0, color0, color1, requireFourColorMode);
+        }
 
         if (!requireFourColorMode)
         {
             // Three-colour mode: sort the shifted endpoints into c0 <= c1 and
-            // leave the indices alone. Equal values are acceptable here, so a
-            // collapsed pair still satisfies the mode.
+            // leave the indices alone.
             if (packed0 > packed1)
             {
                 (packed0, packed1) = (packed1, packed0);
@@ -124,9 +140,8 @@ public static class Bc1Block
 
         // Four-colour mode needs c0 > c1 strictly.
         //
-        // Equal endpoints are degenerate: the palette collapses and the mode is
-        // unobservable, so there is nothing to preserve and the ordering is
-        // accepted as the quantiser produced it.
+        // Equal endpoints are degenerate, so accept them unless the caller asked
+        // to preserve shading from a formerly distinct pair.
         bool needsExchange = packed0 != packed1 && packed0 <= packed1;
 
         if (needsExchange)
@@ -139,6 +154,52 @@ public static class Bc1Block
 
         WritePacked(block, packed0, packed1);
         return needsExchange;
+    }
+
+    private static (ushort Packed0, ushort Packed1) ClosestDistinctPair(
+        ushort common, Rgb color0, Rgb color1, bool requireFourColorMode)
+    {
+        int red = (common >> 11) & 0x1F;
+        int green = (common >> 5) & 0x3F;
+        int blue = common & 0x1F;
+        Span<ushort> neighbors = stackalloc ushort[6];
+        int count = 0;
+
+        if (red > 0) neighbors[count++] = (ushort)(common - 0x800);
+        if (red < 31) neighbors[count++] = (ushort)(common + 0x800);
+        if (green > 0) neighbors[count++] = (ushort)(common - 0x20);
+        if (green < 63) neighbors[count++] = (ushort)(common + 0x20);
+        if (blue > 0) neighbors[count++] = (ushort)(common - 1);
+        if (blue < 31) neighbors[count++] = (ushort)(common + 1);
+
+        ushort best0 = common;
+        ushort best1 = common;
+        int bestDistance = int.MaxValue;
+
+        for (int i = 0; i < count; i++)
+        {
+            ushort neighbor = neighbors[i];
+            Consider(neighbor, common);
+            Consider(common, neighbor);
+        }
+
+        return (best0, best1);
+
+        void Consider(ushort candidate0, ushort candidate1)
+        {
+            bool validMode = requireFourColorMode
+                ? candidate0 > candidate1
+                : candidate0 < candidate1;
+            if (!validMode) return;
+
+            int distance = Rgb.DistanceSquared(Rgb.FromRgb565(candidate0), color0)
+                + Rgb.DistanceSquared(Rgb.FromRgb565(candidate1), color1);
+            if (distance >= bestDistance) return;
+
+            bestDistance = distance;
+            best0 = candidate0;
+            best1 = candidate1;
+        }
     }
 
     private static void WritePacked(Span<byte> block, ushort packed0, ushort packed1)

@@ -5,7 +5,8 @@
         Title="DDS Recolor"
         Width="1480" Height="960"
         MinWidth="1050" MinHeight="720"
-        Background="{DynamicResource AppBackgroundBrush}">
+        Background="{DynamicResource AppBackgroundBrush}"
+        Closing="MainWindowClosing">
     <Grid RowDefinitions="Auto,*,Auto,Auto">
         <Border Grid.Row="0" Background="#202B29" Padding="18,12">
             <Grid ColumnDefinitions="*,Auto,Auto">
@@ -46,6 +47,8 @@
                         <TextBlock x:Name="PreviewTitle" Text="No texture selected" FontSize="17" FontWeight="SemiBold" Foreground="{DynamicResource PrimaryTextBrush}" />
                         <TextBlock x:Name="PreviewDetails" Text="BC1, BC2 and BC3 previews are supported" FontSize="12" Foreground="{DynamicResource SecondaryTextBrush}" />
                     </StackPanel>
+                    <TextBlock x:Name="AppliedChannelsText" Grid.Column="1" VerticalAlignment="Center"
+                               FontSize="12" Foreground="{DynamicResource SecondaryTextBrush}" />
                 </Grid>
                 <Border Grid.Row="1" BorderBrush="#C6CCC4" BorderThickness="1" CornerRadius="3" ClipToBounds="True">
                     <Grid Background="#272D2A">
@@ -113,10 +116,12 @@
                         </ComboBox>
                     </StackPanel>
                 </Grid>
-                <Grid Grid.Row="1" Grid.Column="3" Margin="18,0,0,0" RowDefinitions="Auto,*">
+                <Grid Grid.Row="1" Grid.Column="3" Margin="18,0,0,0" RowDefinitions="Auto,*,Auto">
                     <TextBlock Text="CLI PARAMETER FRAGMENT" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,0,0,8" />
-                    <TextBox x:Name="ParameterTextBox" Grid.Row="1" IsReadOnly="True" TextWrapping="Wrap" VerticalContentAlignment="Top" MinHeight="60" />
+                    <TextBox x:Name="ParameterTextBox" Grid.Row="1" TextWrapping="Wrap" AcceptsReturn="True"
+                             VerticalContentAlignment="Top" MinHeight="60" TextChanged="ParameterTextChanged" />
                     <Button x:Name="CopyParametersButton" Grid.Row="1" Content="Copy" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,6,6" Padding="12,6" Click="CopyParametersClicked" />
+                    <TextBlock x:Name="ParameterIssueText" Grid.Row="2" TextWrapping="Wrap" FontSize="11" IsVisible="False" Margin="0,4,0,0" />
                 </Grid>
             </Grid>
         </Border>

@@ -156,6 +156,24 @@ public class Bc1ThreeColorModeTests
     }
 
     [Fact]
+    public void EndpointCollisionRepair_PreservesThreeColorModeAndIndices()
+    {
+        Span<byte> block = stackalloc byte[Bc1Block.Size];
+        DdsFixture.WriteThreeColorBlock(
+            block, new Rgb(0x60, 0x50, 0x40), new Rgb(0x60, 0x50, 0x48), indexByte: 0x5F);
+        byte[] indices = block[4..].ToArray();
+        var shiftedColor = new Rgb(0x70, 0x60, 0x50);
+
+        Bc1Block.WriteEndpoints(
+            block, shiftedColor, shiftedColor, requireFourColorMode: false, preserveDistinctEndpoints: true);
+
+        var (packed0, packed1) = Bc1Block.ReadPackedEndpoints(block);
+        Assert.True(packed0 < packed1);
+        Assert.False(Bc1Block.IsFourColorMode(block));
+        Assert.Equal(indices, block[4..].ToArray());
+    }
+
+    [Fact]
     public void ThreeColorMode_OpaqueTexelCountIsUnchanged()
     {
         // Stated in terms of what the texture looks like rather than what the
